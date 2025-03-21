@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Build
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db 

@@ -3,7 +3,9 @@ package slackws
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -30,108 +32,131 @@ type SlackWebSocket struct {
 	cookie       string
 	reconnectURL string
 	pingID       int
-	lastPingID   int
+	mu           sync.Mutex
+	stopChan     chan struct{}
 }
 
 func NewSlackWebSocket(token, cookie string) *SlackWebSocket {
 	return &SlackWebSocket{
-		token:  token,
-		cookie: cookie,
-		pingID: 1,
+		token:    token,
+		cookie:   cookie,
+		stopChan: make(chan struct{}),
 	}
 }
 
-func (sws *SlackWebSocket) Connect() error {
-	url := sws.reconnectURL
-	if url == "" {
-		url = fmt.Sprintf("wss://wss-primary.slack.com/?token=%s&sync_desync=1&slack_client=desktop&start_args=%%3Fagent%%3Dclient%%26org_wide_aware%%3Dtrue%%26agent_version%%3D1742552854%%26eac_cache_ts%%3Dtrue%%26cache_ts%%3D0%%26name_tagging%%3Dtrue%%26only_self_subteams%%3Dtrue%%26connect_only%%3Dtrue%%26ms_latest%%3Dtrue&no_query_on_subscribe=1&flannel=3&lazy_channels=1&gateway_server=T05N3TFM0RW-4&batch_presence_aware=1", sws.token)
+func (s *SlackWebSocket) Connect() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Create WebSocket connection
+	url := "wss://3dsellers.slack.com/api/rtm.connect"
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("error creating request: %v", err)
 	}
 
-	// Create custom dialer with cookie header
+	// Add headers
+	req.Header.Add("Cookie", s.cookie)
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", s.token))
+
+	// Create WebSocket connection
 	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-		Subprotocols:     []string{"slack"},
+		EnableCompression: true,
+		HandshakeTimeout:  10 * time.Second,
 	}
 
-	// Create custom headers
-	headers := http.Header{}
-	headers.Add("Cookie", sws.cookie)
-
-	// Connect with custom headers
-	conn, _, err := dialer.Dial(url, headers)
+	conn, _, err := dialer.Dial(req.URL.String(), nil)
 	if err != nil {
-		return fmt.Errorf("error connecting to websocket: %v", err)
+		return fmt.Errorf("error connecting to WebSocket: %v", err)
 	}
 
-	sws.conn = conn
+	s.conn = conn
+	s.pingID = 0
 	return nil
 }
 
-func (sws *SlackWebSocket) Close() error {
-	if sws.conn != nil {
-		return sws.conn.Close()
+func (s *SlackWebSocket) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Signal all goroutines to stop
+	close(s.stopChan)
+
+	// Close the WebSocket connection
+	if s.conn != nil {
+		s.conn.Close()
+		s.conn = nil
 	}
-	return nil
 }
 
-func (sws *SlackWebSocket) sendPing() error {
-	sws.lastPingID = sws.pingID
-	ping := PingMessage{
-		Type: "ping",
-		ID:   sws.pingID,
+func (s *SlackWebSocket) sendPing() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.conn == nil {
+		return fmt.Errorf("websocket connection is closed")
 	}
 
-	message, err := json.Marshal(ping)
-	if err != nil {
-		return fmt.Errorf("error marshaling ping message: %v", err)
-	}
-
-	if err := sws.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-		return fmt.Errorf("error sending ping message: %v", err)
-	}
-
-	// Increment ping ID for next ping
-	sws.pingID++
-	return nil
+	s.pingID++
+	pingMsg := fmt.Sprintf(`{"type":"ping","id":%d}`, s.pingID)
+	return s.conn.WriteMessage(websocket.TextMessage, []byte(pingMsg))
 }
 
-func (sws *SlackWebSocket) ReadMessages() error {
+func (s *SlackWebSocket) ReadMessages() error {
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
 	// Start ping goroutine
 	go func() {
 		for {
-			if err := sws.sendPing(); err != nil {
-				fmt.Printf("Error sending ping: %v\n", err)
+			select {
+			case <-s.stopChan:
 				return
+			case <-pingTicker.C:
+				if err := s.sendPing(); err != nil {
+					log.Printf("Error sending ping: %v\n", err)
+					return
+				}
 			}
-			time.Sleep(5 * time.Second)
 		}
 	}()
 
+	// Read messages
 	for {
-		_, message, err := sws.conn.ReadMessage()
-		if err != nil {
-			return fmt.Errorf("error reading websocket message: %v", err)
-		}
-
-		// Try to parse as reconnect message
-		var reconnectMsg ReconnectMessage
-		if err := json.Unmarshal(message, &reconnectMsg); err == nil && reconnectMsg.Type == "reconnect_url" {
-			sws.reconnectURL = reconnectMsg.URL
-			fmt.Println("Received new reconnect URL")
-			continue
-		}
-
-		// Try to parse as pong message
-		var pongMsg PongMessage
-		if err := json.Unmarshal(message, &pongMsg); err == nil && pongMsg.Type == "pong" {
-			if pongMsg.ID == sws.lastPingID {
-				fmt.Printf("Received matching pong with ID: %d\n", pongMsg.ID)
-			} else {
-				fmt.Printf("Warning: Received pong with mismatched ID. Expected: %d, Got: %d\n", sws.lastPingID, pongMsg.ID)
+		select {
+		case <-s.stopChan:
+			return nil
+		default:
+			s.mu.Lock()
+			if s.conn == nil {
+				s.mu.Unlock()
+				return fmt.Errorf("websocket connection is closed")
 			}
-			continue
-		}
+			s.mu.Unlock()
 
-		fmt.Printf("Received message: %s\n", message)
+			_, message, err := s.conn.ReadMessage()
+			if err != nil {
+				return fmt.Errorf("error reading message: %v", err)
+			}
+
+			// Parse message
+			var msg map[string]interface{}
+			if err := json.Unmarshal(message, &msg); err != nil {
+				log.Printf("Error parsing message: %v\n", err)
+				continue
+			}
+
+			// Handle different message types
+			switch msg["type"] {
+			case "pong":
+				if id, ok := msg["id"].(float64); ok {
+					if int(id) != s.pingID {
+						log.Printf("Ping ID mismatch: expected %d, got %d\n", s.pingID, int(id))
+					}
+				}
+			case "reconnect_url":
+				// Handle reconnect URL if needed
+			}
+		}
 	}
 }

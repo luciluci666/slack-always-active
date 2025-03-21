@@ -1,114 +1,94 @@
 # Slack Always Active
 
-A Go application that keeps your Slack status active by maintaining a WebSocket connection and periodically checking your authentication status.
+A Go application that keeps your Slack status active during working hours.
 
 ## Features
 
-- Validates Slack token and cookies
-- Maintains WebSocket connection to Slack
-- Automatic reconnection on connection loss
-- Environment variable configuration
-- Docker support
-- File logging with volume support
+- Maintains Slack active status during configured working hours
+- Automatically sleeps outside of working hours
+- Configurable work days and hours
+- Docker support with log persistence
 
-## Prerequisites
+## Configuration
 
-- Go 1.21 or later
-- Slack account with valid token and cookies
-- Docker (optional, for containerized deployment)
+Create a `.env` file based on the provided `.env.example`:
 
-## Setup
-
-### Local Development
-
-1. Clone the repository:
 ```bash
-git clone https://github.com/lucy/slack-always-active.git
-cd slack-always-active
+# Slack credentials
+SLACK_TOKEN=xoxc-your-slack-token
+SLACK_COOKIE=your-slack-cookie
+
+# Schedule configuration
+WORK_DAYS=monday,tuesday,wednesday,thursday,friday  # Comma-separated list of work days
+WORK_START=09:00  # Work start time (24-hour format, UTC)
+WORK_END=17:00    # Work end time (24-hour format, UTC)
 ```
 
-2. Install dependencies:
-```bash
-go mod download
-```
+### Schedule Configuration
 
-3. Create a `.env` file in the project root with your Slack credentials:
-```env
-SLACK_TOKEN=your_slack_token
-SLACK_COOKIE=your_slack_cookie
-```
+The application supports flexible scheduling:
 
-4. Run the application:
-```bash
-go run main.go
-```
+- **Work Days**: Specify work days using their names (monday through sunday), comma-separated
+- **Work Hours**: Set start and end times in 24-hour format (HH:MM) in UTC
 
-### Docker Deployment
+Default values if not specified:
+- Work days: Monday through Friday
+- Work hours: 09:00 to 17:00 UTC
 
-1. Build the Docker image:
+## Running Locally
+
+1. Clone the repository
+2. Copy `.env.example` to `.env` and configure your settings
+3. Run the application:
+   ```bash
+   go run main.go
+   ```
+
+## Docker Support
+
+### Building the Image
+
 ```bash
 docker build -t slack-always-active .
 ```
 
-2. Create a `.env` file with your Slack credentials:
-```env
-SLACK_TOKEN=your_slack_token
-SLACK_COOKIE=your_slack_cookie
-```
+### Running with Docker
 
-3. Run the container with volume for logs:
 ```bash
 docker run -d \
   --name slack-always-active \
-  --env-file .env \
   -v $(pwd)/logs:/app/logs \
+  -e SLACK_TOKEN=your_slack_token \
+  -e SLACK_COOKIE=your_slack_cookie \
+  -e WORK_DAYS=monday,tuesday,wednesday,thursday,friday \
+  -e WORK_START=09:00 \
+  -e WORK_END=17:00 \
   slack-always-active
 ```
 
-Or run with environment variables directly:
+Or using a `.env` file:
+
 ```bash
 docker run -d \
   --name slack-always-active \
-  -e SLACK_TOKEN=your_slack_token \
-  -e SLACK_COOKIE=your_slack_cookie \
   -v $(pwd)/logs:/app/logs \
+  --env-file .env \
   slack-always-active
 ```
 
 ## Logging
 
-The application logs all activities to both stdout and a log file. When running in Docker:
+The application logs its activities to both stdout and a log file:
 
-- Logs are stored in `/app/logs/slack-always-active.log` inside the container
-- The logs directory is exposed as a volume and can be mounted to the host
-- Logs include timestamps and are formatted for easy reading
-- Error messages are prefixed with "ERROR:"
+- Log file location: `logs/slack-always-active.log`
+- When running with Docker, logs are stored in `/app/logs/slack-always-active.log` inside the container
+- The logs directory is exposed as a volume that can be mounted to persist logs
 
 To view logs:
-```bash
-# View logs from host
-tail -f logs/slack-always-active.log
 
-# View logs from container
-docker logs slack-always-active
-```
-
-## Usage
-
-Run the application:
-```bash
-go run main.go
-```
-
-The application will:
-1. Check your Slack authentication status
-2. Connect to Slack's WebSocket server
-3. Maintain the connection and automatically reconnect if disconnected
-
-## Security Note
-
-Never commit your `.env` file or share your Slack token and cookies. These credentials should be kept private and secure.
+- From the host: `tail -f logs/slack-always-active.log`
+- From the container: `docker logs -f slack-always-active`
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+MIT 

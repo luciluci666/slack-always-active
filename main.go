@@ -11,6 +11,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/lucy/slack-always-active/logger"
+	"github.com/lucy/slack-always-active/schedule"
 	"github.com/lucy/slack-always-active/slackws"
 )
 
@@ -78,6 +79,15 @@ func checkSlackStatus(token, cookie string) (*UserBootResponse, error) {
 	return &userBoot, nil
 }
 
+func formatTimeWithOffset(t time.Time, offset int) string {
+	// Adjust the time by the GMT offset
+	adjustedTime := t.Add(time.Duration(offset) * time.Hour)
+
+	// Format the time with the offset
+	offsetStr := fmt.Sprintf("GMT%+d", offset)
+	return fmt.Sprintf("%s (%s)", adjustedTime.Format("2006-01-02 15:04:05"), offsetStr)
+}
+
 func main() {
 	// Initialize logger with local logs directory
 	logPath := "logs/slack-always-active.log"
@@ -90,6 +100,13 @@ func main() {
 	// Load environment variables
 	if err := godotenv.Load(); err != nil {
 		logger.Printf("Warning: .env file not found: %v\n", err)
+	}
+
+	// Initialize schedule
+	sched, err := schedule.NewSchedule()
+	if err != nil {
+		logger.Error("Failed to initialize schedule: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Get credentials from environment variables
@@ -114,19 +131,56 @@ func main() {
 	// Create and connect WebSocket
 	logger.Printf("Connecting to Slack WebSocket...")
 	ws := slackws.NewSlackWebSocket(token, cookie)
+	var isConnected bool
+
 	for {
-		if err := ws.Connect(); err != nil {
-			logger.Error("WebSocket connection error: %v\n", err)
-			logger.Printf("Reconnecting in 5 seconds...\n")
-			time.Sleep(5 * time.Second)
+		// Check if we're in working hours
+		if !sched.IsWorkingTime() {
+			nextTime := sched.GetNextWorkingTime()
+			logger.Printf("Outside working hours. Next working time: %s\n", formatTimeWithOffset(nextTime, sched.GetOffset()))
+
+			// Close WebSocket if it's connected
+			if isConnected {
+				logger.Printf("Closing WebSocket connection...\n")
+				ws.Close()
+				isConnected = false
+			}
+
+			time.Sleep(5 * time.Minute)
 			continue
 		}
 
-		if err := ws.ReadMessages(); err != nil {
-			logger.Error("WebSocket read error: %v\n", err)
-			ws.Close()
-			logger.Printf("Reconnecting in 5 seconds...\n")
-			time.Sleep(5 * time.Second)
+		// If we're in working hours but not connected, connect
+		if !isConnected {
+			if err := ws.Connect(); err != nil {
+				logger.Error("WebSocket connection error: %v\n", err)
+				logger.Printf("Reconnecting in 5 seconds...\n")
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			isConnected = true
+			logger.Printf("WebSocket connected successfully\n")
+		}
+
+		// Create a channel for WebSocket messages
+		msgChan := make(chan error, 1)
+		go func() {
+			msgChan <- ws.ReadMessages()
+		}()
+
+		// Wait for either a message or a timeout
+		select {
+		case err := <-msgChan:
+			if err != nil {
+				logger.Error("WebSocket read error: %v\n", err)
+				ws.Close()
+				isConnected = false
+				logger.Printf("Reconnecting in 5 seconds...\n")
+				time.Sleep(5 * time.Second)
+				continue
+			}
+		case <-time.After(1 * time.Second):
+			// Check working hours again after timeout
 			continue
 		}
 	}

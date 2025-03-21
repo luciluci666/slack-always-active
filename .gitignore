@@ -24,4 +24,5 @@ go.work.sum
 # env file
 .env
 
-logs
+cache/websocket_cache.json
+logs/

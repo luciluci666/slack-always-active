@@ -131,7 +131,6 @@ func main() {
 	// Create and connect WebSocket
 	logger.Printf("Connecting to Slack WebSocket...")
 	ws := slackws.NewSlackWebSocket(token, cookie)
-	var isConnected bool
 
 	for {
 		// Check if we're in working hours
@@ -140,10 +139,9 @@ func main() {
 			logger.Printf("Outside working hours. Next working time: %s\n", formatTimeWithOffset(nextTime, sched.GetOffset()))
 
 			// Close WebSocket if it's connected
-			if isConnected {
+			if ws.IsConnected() {
 				logger.Printf("Closing WebSocket connection...\n")
 				ws.Close()
-				isConnected = false
 			}
 
 			time.Sleep(5 * time.Minute)
@@ -151,14 +149,13 @@ func main() {
 		}
 
 		// If we're in working hours but not connected, connect
-		if !isConnected {
+		if !ws.IsConnected() {
 			if err := ws.Connect(); err != nil {
 				logger.Error("WebSocket connection error: %v\n", err)
 				logger.Printf("Reconnecting in 5 seconds...\n")
 				time.Sleep(5 * time.Second)
 				continue
 			}
-			isConnected = true
 			logger.Printf("WebSocket connected successfully\n")
 		}
 
@@ -174,7 +171,6 @@ func main() {
 			if err != nil {
 				logger.Error("WebSocket read error: %v\n", err)
 				ws.Close()
-				isConnected = false
 				logger.Printf("Reconnecting in 5 seconds...\n")
 				time.Sleep(5 * time.Second)
 				continue

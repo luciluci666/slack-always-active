@@ -81,6 +81,8 @@ func checkSlackStatus(token, cookie string) (*UserBootResponse, error) {
 		return nil, fmt.Errorf("slack API error: %s", userBoot.Error)
 	}
 
+	fmt.Printf("Connected as %s\n", userBoot.Self.RealName)
+
 	return &userBoot, nil
 }
 
@@ -99,6 +101,13 @@ func main() {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
 	defer logger.Close()
+
+	// this requires rest token
+	// _, err := checkSlackStatus(os.Getenv("SLACK_TOKEN"), os.Getenv("SLACK_COOKIE"))
+	// if err != nil {
+	// 	logger.Error("Failed to check Slack status:", err)
+	// 	os.Exit(1)
+	// }
 
 	// Load environment variables
 	if err := godotenv.Load(); err != nil {

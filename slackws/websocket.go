@@ -63,8 +63,10 @@ func (s *SlackWebSocket) Connect() error {
 	s.isConnected = false
 	s.stopChan = make(chan struct{})
 
+	// notRequiredParams := "&sync_desync=1&slack_client=desktop&start_args=%3Fagent%3Dclient%26org_wide_aware%3Dtrue%26agent_version%3D1742552854%26eac_cache_ts%3Dtrue%26cache_ts%3D0%26name_tagging%3Dtrue%26only_self_subteams%3Dtrue%26connect_only%3Dtrue%26ms_latest%3Dtrue&no_query_on_subscribe=1&flannel=3&lazy_channels=1&gateway_server=T05N3TFM0RW-4&batch_presence_aware=1"
+
 	// Use default WebSocket URL
-	url := fmt.Sprintf("wss://wss-primary.slack.com/?token=%s&sync_desync=1&slack_client=desktop&start_args=%%3Fagent%%3Dclient%%26org_wide_aware%%3Dtrue%%26agent_version%%3D1742552854%%26eac_cache_ts%%3Dtrue%%26cache_ts%%3D0%%26name_tagging%%3Dtrue%%26only_self_subteams%%3Dtrue%%26connect_only%%3Dtrue%%26ms_latest%%3Dtrue&no_query_on_subscribe=1&flannel=3&lazy_channels=1&gateway_server=T05N3TFM0RW-4&batch_presence_aware=1", s.token)
+	url := fmt.Sprintf("wss://wss-primary.slack.com/?token=%s", s.token)
 
 	// Create custom dialer with cookie header
 	dialer := websocket.Dialer{

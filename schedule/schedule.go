@@ -3,15 +3,16 @@ package schedule
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type Schedule struct {
-	workDays  []time.Weekday
-	startTime time.Time
-	endTime   time.Time
-	offset    int // GMT offset in hours
+	workDays []time.Weekday
+	start    time.Time
+	end      time.Time
+	offset   int
 }
 
 func parseTime(timeStr string) (time.Time, error) {
@@ -20,29 +21,39 @@ func parseTime(timeStr string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("invalid time format: %s", timeStr)
 	}
 
-	hour := 0
-	minute := 0
-	if _, err := fmt.Sscanf(parts[0], "%d", &hour); err != nil {
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid hour: %s", parts[0])
 	}
-	if _, err := fmt.Sscanf(parts[1], "%d", &minute); err != nil {
+
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid minute: %s", parts[1])
 	}
 
-	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
-		return time.Time{}, fmt.Errorf("time out of range: %s", timeStr)
-	}
-
-	return time.Date(2000, 1, 1, hour, minute, 0, 0, time.UTC), nil
+	// Create time for today with the specified hour and minute
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, time.UTC), nil
 }
 
 func parseWorkDays(daysStr string) ([]time.Weekday, error) {
+	if daysStr == "" {
+		// Default to Monday-Friday
+		return []time.Weekday{
+			time.Monday,
+			time.Tuesday,
+			time.Wednesday,
+			time.Thursday,
+			time.Friday,
+		}, nil
+	}
+
 	days := strings.Split(daysStr, ",")
 	workDays := make([]time.Weekday, 0, len(days))
 
 	for _, day := range days {
-		day = strings.TrimSpace(day)
-		switch strings.ToLower(day) {
+		day = strings.TrimSpace(strings.ToLower(day))
+		switch day {
 		case "monday":
 			workDays = append(workDays, time.Monday)
 		case "tuesday":
@@ -62,141 +73,131 @@ func parseWorkDays(daysStr string) ([]time.Weekday, error) {
 		}
 	}
 
-	if len(workDays) == 0 {
-		return nil, fmt.Errorf("no valid work days specified")
-	}
-
 	return workDays, nil
 }
 
-func parseGMTOffset(offsetStr string) (int, error) {
+func parseOffset(offsetStr string) (int, error) {
 	if offsetStr == "" {
 		return 0, nil // Default to UTC
 	}
 
-	// Remove any spaces and convert to lowercase
-	offsetStr = strings.TrimSpace(strings.ToLower(offsetStr))
+	// Remove "GMT" prefix if present
+	offsetStr = strings.TrimPrefix(offsetStr, "GMT")
+	offsetStr = strings.TrimPrefix(offsetStr, "gmt")
 
-	// Handle GMT+/-HH format
-	var sign int
-	var hours int
-	if strings.HasPrefix(offsetStr, "gmt+") {
-		sign = 1
-		offsetStr = offsetStr[4:]
-	} else if strings.HasPrefix(offsetStr, "gmt-") {
-		sign = -1
-		offsetStr = offsetStr[4:]
-	} else {
-		return 0, fmt.Errorf("invalid GMT offset format: %s", offsetStr)
+	// Parse the offset
+	offset, err := strconv.Atoi(offsetStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid GMT offset: %s", offsetStr)
 	}
 
-	if _, err := fmt.Sscanf(offsetStr, "%d", &hours); err != nil {
-		return 0, fmt.Errorf("invalid hours in GMT offset: %s", offsetStr)
-	}
-
-	if hours < 0 || hours > 23 {
-		return 0, fmt.Errorf("GMT offset hours must be between 0 and 23: %d", hours)
-	}
-
-	return sign * hours, nil
+	return offset, nil
 }
 
 func NewSchedule() (*Schedule, error) {
-	workDaysStr := os.Getenv("WORK_DAYS")
-	startTimeStr := os.Getenv("WORK_START")
-	endTimeStr := os.Getenv("WORK_END")
-	gmtOffsetStr := os.Getenv("GMT_OFFSET")
-
-	if workDaysStr == "" {
-		workDaysStr = "monday,tuesday,wednesday,thursday,friday"
-	}
-	if startTimeStr == "" {
-		startTimeStr = "09:00"
-	}
-	if endTimeStr == "" {
-		endTimeStr = "17:00"
-	}
-
-	workDays, err := parseWorkDays(workDaysStr)
+	// Get work days from environment
+	workDays, err := parseWorkDays(os.Getenv("WORK_DAYS"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse work days: %v", err)
+		return nil, fmt.Errorf("error parsing work days: %v", err)
 	}
 
-	startTime, err := parseTime(startTimeStr)
+	// Get work hours from environment
+	startTime, err := parseTime(os.Getenv("WORK_START"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse start time: %v", err)
+		return nil, fmt.Errorf("error parsing start time: %v", err)
 	}
 
-	endTime, err := parseTime(endTimeStr)
+	endTime, err := parseTime(os.Getenv("WORK_END"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse end time: %v", err)
+		return nil, fmt.Errorf("error parsing end time: %v", err)
 	}
 
-	offset, err := parseGMTOffset(gmtOffsetStr)
+	// Get GMT offset from environment
+	offset, err := parseOffset(os.Getenv("GMT_OFFSET"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse GMT offset: %v", err)
+		return nil, fmt.Errorf("error parsing GMT offset: %v", err)
 	}
 
 	return &Schedule{
-		workDays:  workDays,
-		startTime: startTime,
-		endTime:   endTime,
-		offset:    offset,
+		workDays: workDays,
+		start:    startTime,
+		end:      endTime,
+		offset:   offset,
 	}, nil
 }
 
 func (s *Schedule) IsWorkingTime() bool {
+	// Get current time in UTC
 	now := time.Now().UTC()
-	weekday := now.Weekday()
 
-	// Adjust current time by GMT offset
-	adjustedHour := (now.Hour() + s.offset + 24) % 24
-	currentTime := time.Date(2000, 1, 1, adjustedHour, now.Minute(), 0, 0, time.UTC)
+	// Adjust current time by the GMT offset
+	now = now.Add(time.Duration(s.offset) * time.Hour)
 
+	// Check if current day is a work day
 	isWorkDay := false
 	for _, day := range s.workDays {
-		if weekday == day {
+		if now.Weekday() == day {
 			isWorkDay = true
 			break
 		}
 	}
+
 	if !isWorkDay {
 		return false
 	}
 
-	return currentTime.After(s.startTime) && currentTime.Before(s.endTime)
+	// Create current time with only hour and minute for comparison
+	currentTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
+	startTime := time.Date(now.Year(), now.Month(), now.Day(), s.start.Hour(), s.start.Minute(), 0, 0, time.UTC)
+	endTime := time.Date(now.Year(), now.Month(), now.Day(), s.end.Hour(), s.end.Minute(), 0, 0, time.UTC)
+
+	// Check if current time is within work hours
+	return currentTime.After(startTime) && currentTime.Before(endTime)
 }
 
 func (s *Schedule) GetNextWorkingTime() time.Time {
 	now := time.Now().UTC()
-	weekday := now.Weekday()
+	now = now.Add(time.Duration(s.offset) * time.Hour)
 
-	// Adjust current time by GMT offset
-	adjustedHour := (now.Hour() + s.offset + 24) % 24
-	currentTime := time.Date(2000, 1, 1, adjustedHour, now.Minute(), 0, 0, time.UTC)
+	// Create current time with only hour and minute for comparison
+	currentTime := time.Date(2000, 1, 1, now.Hour(), now.Minute(), 0, 0, time.UTC)
+	startTime := time.Date(2000, 1, 1, s.start.Hour(), s.start.Minute(), 0, 0, time.UTC)
+	endTime := time.Date(2000, 1, 1, s.end.Hour(), s.end.Minute(), 0, 0, time.UTC)
 
-	if currentTime.After(s.startTime) && currentTime.Before(s.endTime) {
-		// Calculate end time in UTC
-		endHour := (s.endTime.Hour() - s.offset + 24) % 24
-		return time.Date(now.Year(), now.Month(), now.Day(), endHour, s.endTime.Minute(), 0, 0, time.UTC)
+	// If we're before start time today, return start time today
+	if currentTime.Before(startTime) {
+		nextTime := time.Date(now.Year(), now.Month(), now.Day(), s.start.Hour(), s.start.Minute(), 0, 0, time.UTC)
+		return nextTime.Add(-time.Duration(s.offset) * time.Hour)
 	}
 
-	nextWorkDay := weekday
-	daysToAdd := 0
-	for {
-		nextWorkDay = (nextWorkDay + 1) % 7
-		daysToAdd++
-		for _, day := range s.workDays {
-			if nextWorkDay == day {
-				// Calculate start time in UTC
-				startHour := (s.startTime.Hour() - s.offset + 24) % 24
-				return now.AddDate(0, 0, daysToAdd).UTC().Truncate(24 * time.Hour).Add(time.Duration(startHour)*time.Hour + time.Duration(s.startTime.Minute())*time.Minute)
+	// If we're after end time today, find next work day
+	if currentTime.After(endTime) {
+		// Start from tomorrow
+		nextDay := now.Add(24 * time.Hour)
+		for {
+			// Check if this is a work day
+			isWorkDay := false
+			for _, day := range s.workDays {
+				if nextDay.Weekday() == day {
+					isWorkDay = true
+					break
+				}
 			}
+
+			if isWorkDay {
+				// Return start time on this day
+				nextTime := time.Date(nextDay.Year(), nextDay.Month(), nextDay.Day(), s.start.Hour(), s.start.Minute(), 0, 0, time.UTC)
+				return nextTime.Add(-time.Duration(s.offset) * time.Hour)
+			}
+
+			nextDay = nextDay.Add(24 * time.Hour)
 		}
 	}
+
+	// If we're within working hours, return current time
+	return now.Add(-time.Duration(s.offset) * time.Hour)
 }
 
-// GetOffset returns the GMT offset in hours
 func (s *Schedule) GetOffset() int {
 	return s.offset
 }

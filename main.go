@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/lucy/slack-always-active/cache"
 	"github.com/lucy/slack-always-active/logger"
 	"github.com/lucy/slack-always-active/schedule"
 	"github.com/lucy/slack-always-active/slackws"
@@ -89,95 +94,115 @@ func formatTimeWithOffset(t time.Time, offset int) string {
 }
 
 func main() {
-	// Initialize logger with local logs directory
-	logPath := "logs/slack-always-active.log"
-	if err := logger.Init(logPath); err != nil {
-		fmt.Printf("Failed to initialize logger: %v\n", err)
-		os.Exit(1)
+	// Initialize logger
+	if err := logger.Init("logs/slack-always-active.log"); err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
 	}
 	defer logger.Close()
 
 	// Load environment variables
 	if err := godotenv.Load(); err != nil {
-		logger.Printf("Warning: .env file not found: %v\n", err)
+		logger.Warn("Warning: .env file not found")
 	}
 
-	// Initialize schedule
-	sched, err := schedule.NewSchedule()
-	if err != nil {
-		logger.Error("Failed to initialize schedule: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Get credentials from environment variables
+	// Get required environment variables
 	token := os.Getenv("SLACK_TOKEN")
 	cookie := os.Getenv("SLACK_COOKIE")
 
 	if token == "" || cookie == "" {
-		logger.Error("SLACK_TOKEN and SLACK_COOKIE environment variables must be set")
+		logger.Error("Error: SLACK_TOKEN and SLACK_COOKIE must be set in .env file")
 		os.Exit(1)
 	}
 
-	// Check Slack status
-	logger.Printf("Checking Slack status...")
-	userBoot, err := checkSlackStatus(token, cookie)
+	// Initialize cache
+	cache, err := cache.NewCache("cache")
 	if err != nil {
-		logger.Error("Error checking Slack status: %v\n", err)
+		logger.Error("Failed to initialize cache:", err)
 		os.Exit(1)
 	}
 
-	logger.Printf("Connected as: %s\n", userBoot.Self.RealName)
-
-	// Create and connect WebSocket
-	logger.Printf("Connecting to Slack WebSocket...")
-	ws := slackws.NewSlackWebSocket(token, cookie)
-
-	for {
-		// Check if we're in working hours
-		if !sched.IsWorkingTime() {
-			nextTime := sched.GetNextWorkingTime()
-			logger.Printf("Outside working hours. Next working time: %s\n", formatTimeWithOffset(nextTime, sched.GetOffset()))
-
-			// Close WebSocket if it's connected
-			if ws.IsConnected() {
-				logger.Printf("Closing WebSocket connection...\n")
-				ws.Close()
-			}
-
-			time.Sleep(5 * time.Minute)
-			continue
-		}
-
-		// If we're in working hours but not connected, connect
-		if !ws.IsConnected() {
-			if err := ws.Connect(); err != nil {
-				logger.Error("WebSocket connection error: %v\n", err)
-				logger.Printf("Reconnecting in 5 seconds...\n")
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			logger.Printf("WebSocket connected successfully\n")
-		}
-
-		// Create a channel for WebSocket messages
-		msgChan := make(chan error, 1)
-		go func() {
-			msgChan <- ws.ReadMessages()
-		}()
-
-		// Wait for either a message or a timeout
-		select {
-		case err := <-msgChan:
-			if err != nil {
-				logger.Error("WebSocket read error: %v\n", err)
-				ws.Close()
-				logger.Printf("Reconnecting in 5 seconds...\n")
-				time.Sleep(5 * time.Second)
-				continue
-			}
-		case <-time.After(1 * time.Second):
-			// Check working hours again after timeout
-			continue
-		}
+	// Initialize schedule
+	schedule, err := schedule.NewSchedule()
+	if err != nil {
+		logger.Error("Failed to initialize schedule:", err)
+		os.Exit(1)
 	}
+
+	// Create context that can be cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Create WebSocket instance
+	ws := slackws.NewSlackWebSocket(token, cookie, cache)
+
+	// Start a goroutine to handle signals
+	go func() {
+		<-sigChan
+		logger.Info("Received shutdown signal, cleaning up...")
+		cancel()
+	}()
+
+	// Start a goroutine to check working hours and manage WebSocket connection
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				if schedule.IsWorkingTime() {
+					// If we're in working hours, ensure WebSocket is connected
+					if !ws.IsConnected() {
+						logger.Info("Working hours started, connecting to Slack...")
+						if err := ws.Connect(); err != nil {
+							logger.Error("Failed to connect to Slack:", err)
+							continue
+						}
+						logger.Info("Successfully connected to Slack")
+					}
+				} else {
+					// If we're outside working hours, disconnect WebSocket
+					if ws.IsConnected() {
+						logger.Info("Working hours ended, disconnecting from Slack...")
+						ws.Disconnect()
+						logger.Info("Disconnected from Slack")
+					}
+					nextTime := schedule.GetNextWorkingTime()
+					logger.Info(fmt.Sprintf("Outside working hours. Next working time: %s (GMT+%d)", nextTime.Format("2006-01-02 15:04:05"), schedule.GetOffset()))
+				}
+				// Check every minute
+				time.Sleep(time.Minute)
+			}
+		}
+	}()
+
+	// Start reading messages in a separate goroutine
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				if ws.IsConnected() {
+					if err := ws.ReadMessages(); err != nil {
+						logger.Error("Error reading messages:", err)
+						// Don't disconnect here, let the working hours check handle reconnection
+					}
+				}
+				time.Sleep(time.Second)
+			}
+		}
+	}()
+
+	// Wait for context cancellation
+	<-ctx.Done()
+
+	// Cleanup
+	if ws.IsConnected() {
+		ws.Disconnect()
+	}
+	logger.Info("Application shutdown complete")
 }

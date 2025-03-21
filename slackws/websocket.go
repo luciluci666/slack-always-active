@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/lucy/slack-always-active/cache"
 )
 
 type ReconnectMessage struct {
@@ -36,9 +37,10 @@ type SlackWebSocket struct {
 	stopChan    chan struct{}
 	closed      bool
 	isConnected bool
+	cache       *cache.Cache
 }
 
-func NewSlackWebSocket(token, cookie string) *SlackWebSocket {
+func NewSlackWebSocket(token, cookie string, cache *cache.Cache) *SlackWebSocket {
 	return &SlackWebSocket{
 		token:       token,
 		cookie:      cookie,
@@ -46,6 +48,7 @@ func NewSlackWebSocket(token, cookie string) *SlackWebSocket {
 		stopChan:    make(chan struct{}),
 		closed:      false,
 		isConnected: false,
+		cache:       cache,
 	}
 }
 
@@ -60,7 +63,7 @@ func (s *SlackWebSocket) Connect() error {
 	s.isConnected = false
 	s.stopChan = make(chan struct{})
 
-	// Create WebSocket connection
+	// Use default WebSocket URL
 	url := fmt.Sprintf("wss://wss-primary.slack.com/?token=%s&sync_desync=1&slack_client=desktop&start_args=%%3Fagent%%3Dclient%%26org_wide_aware%%3Dtrue%%26agent_version%%3D1742552854%%26eac_cache_ts%%3Dtrue%%26cache_ts%%3D0%%26name_tagging%%3Dtrue%%26only_self_subteams%%3Dtrue%%26connect_only%%3Dtrue%%26ms_latest%%3Dtrue&no_query_on_subscribe=1&flannel=3&lazy_channels=1&gateway_server=T05N3TFM0RW-4&batch_presence_aware=1", s.token)
 
 	// Create custom dialer with cookie header
@@ -124,7 +127,6 @@ func (s *SlackWebSocket) sendPing() error {
 		Type: "ping",
 		ID:   s.pingID,
 	}
-	fmt.Println("Sending ping:", ping)
 
 	message, err := json.Marshal(ping)
 	if err != nil {
@@ -192,8 +194,28 @@ func (s *SlackWebSocket) ReadMessages() error {
 				continue
 			}
 
+			// Try to parse as reconnect message
+			var reconnectMsg ReconnectMessage
+			if err := json.Unmarshal(message, &reconnectMsg); err == nil && reconnectMsg.Type == "reconnect_url" {
+				log.Printf("Received new reconnect URL\n")
+				s.cache.SetWebSocketURL(reconnectMsg.URL)
+				continue
+			}
+
 			// Log other messages for debugging
 			log.Printf("Received message: %s\n", message)
 		}
+	}
+}
+
+// Disconnect closes the WebSocket connection
+func (ws *SlackWebSocket) Disconnect() {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	if ws.conn != nil {
+		ws.conn.Close()
+		ws.conn = nil
+		ws.isConnected = false
 	}
 }

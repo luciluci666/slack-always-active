@@ -33,6 +33,7 @@ WORKDIR /app
 
 # Create logs directory with proper permissions
 RUN mkdir -p /app/logs && chown -R appuser:appuser /app/logs
+RUN mkdir -p /app/cache/cache && chown -R appuser:appuser /app/cache/cache
 
 # Copy binary from builder
 COPY --from=builder /app/slack-always-active .

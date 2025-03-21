@@ -115,7 +115,7 @@ func main() {
 	}
 
 	// Initialize cache
-	cache, err := cache.NewCache("cache")
+	cache, err := cache.NewCache("cache/cache")
 	if err != nil {
 		logger.Error("Failed to initialize cache:", err)
 		os.Exit(1)

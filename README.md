@@ -80,19 +80,31 @@ GMT_OFFSET=GMT+2  # Your timezone offset (e.g., GMT+2 for UTC+2)
    docker build -t slack-always-active .
    ```
 
-2. Run the container:
+2. Make sure your `.env` file is properly configured with all required variables:
+   ```env
+   SLACK_TOKEN=your_slack_token
+   SLACK_COOKIE=your_slack_cookie
+   WORK_DAYS=Monday,Tuesday,Wednesday,Thursday,Friday
+   WORK_START=09:00
+   WORK_END=18:00
+   GMT_OFFSET=GMT+2
+   ```
+
+3. Run the container:
    ```bash
    docker run -d --name slack-always-active \
-     -e SLACK_TOKEN=your_slack_token \
-     -e SLACK_COOKIE=your_slack_cookie \
-     -e WORK_DAYS=Monday,Tuesday,Wednesday,Thursday,Friday \
-     -e WORK_START=09:00 \
-     -e WORK_END=18:00 \
-     -e GMT_OFFSET=GMT+2 \
+     --env-file .env \
      -v $(pwd)/logs:/app/logs \
      slack-always-active
    ```
 
+   This command will:
+   - Use all environment variables from your `.env` file
+   - Mount the logs directory to persist logs on your host machine
+   - Run the container in detached mode (-d)
+
+   Make sure your `.env` file is in the same directory where you run the docker command.
+   
 ## Logging
 
 The application logs all activities to both stdout and a log file. When running in Docker, logs are stored in `/app/logs/slack-always-active.log` inside the container. The logs directory is exposed as a volume that can be mounted to the host.

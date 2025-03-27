@@ -30,7 +30,7 @@ SLACK_COOKIE=your_slack_cookie
 WORK_DAYS=Monday,Tuesday,Wednesday,Thursday,Friday
 WORK_START=09:00
 WORK_END=18:00
-GMT_OFFSET=GMT+2  # Your timezone offset (e.g., GMT+2 for UTC+2)
+GMT_OFFSET=+2  # Your timezone offset (e.g., +2 for UTC+2)
 ```
 
 ### Environment Variables
@@ -40,15 +40,15 @@ GMT_OFFSET=GMT+2  # Your timezone offset (e.g., GMT+2 for UTC+2)
 - `WORK_DAYS`: Comma-separated list of working days (default: Monday-Friday)
 - `WORK_START`: Start time in 24-hour format (default: 09:00)
 - `WORK_END`: End time in 24-hour format (default: 18:00)
-- `GMT_OFFSET`: Your timezone offset (e.g., GMT+2 for UTC+2)
+- `GMT_OFFSET`: Your timezone offset (e.g., +2 for UTC+2)
 
 ### GMT Offset Examples
 
-- `GMT+0`: UTC/GMT
-- `GMT+1`: Central European Time (CET)
-- `GMT+2`: Eastern European Time (EET)
-- `GMT-5`: Eastern Time (ET)
-- `GMT-8`: Pacific Time (PT)
+- `+0`: UTC/GMT
+- `+1`: Central European Time (CET)
+- `+2`: Eastern European Time (EET)
+- `-5`: Eastern Time (ET)
+- `-8`: Pacific Time (PT)
 
 ## Building and Running
 
@@ -87,7 +87,7 @@ GMT_OFFSET=GMT+2  # Your timezone offset (e.g., GMT+2 for UTC+2)
    WORK_DAYS=Monday,Tuesday,Wednesday,Thursday,Friday
    WORK_START=09:00
    WORK_END=18:00
-   GMT_OFFSET=GMT+2
+   GMT_OFFSET=+2
    ```
 
 3. Run the container:

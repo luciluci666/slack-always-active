@@ -170,7 +170,6 @@ func main() {
 							logger.Error("Failed to connect to Slack:", err)
 							continue
 						}
-						logger.Info("Successfully connected to Slack")
 					}
 				} else {
 					// If we're outside working hours, disconnect WebSocket

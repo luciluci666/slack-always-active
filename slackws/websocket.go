@@ -147,7 +147,9 @@ func (s *SlackWebSocket) sendPing() error {
 
 func (s *SlackWebSocket) ReadMessages() error {
 	pingTicker := time.NewTicker(5 * time.Second)
+	reconnectTicker := time.NewTicker(5 * time.Minute)
 	defer pingTicker.Stop()
+	defer reconnectTicker.Stop()
 
 	// Start ping goroutine
 	go func() {
@@ -159,6 +161,30 @@ func (s *SlackWebSocket) ReadMessages() error {
 				if err := s.sendPing(); err != nil {
 					log.Printf("Error sending ping: %v\n", err)
 					return
+				}
+			}
+		}
+	}()
+
+	// Start reconnection goroutine
+	go func() {
+		for {
+			select {
+			case <-s.stopChan:
+				return
+			case <-reconnectTicker.C:
+				s.mu.Lock()
+				if s.isConnected {
+					log.Printf("Scheduled reconnection triggered\n")
+					s.mu.Unlock()
+					s.Disconnect()
+					if err := s.Connect(); err != nil {
+						log.Printf("Error during scheduled reconnection: %v\n", err)
+						continue
+					}
+					log.Printf("Successfully reconnected\n")
+				} else {
+					s.mu.Unlock()
 				}
 			}
 		}
@@ -189,7 +215,7 @@ func (s *SlackWebSocket) ReadMessages() error {
 			var pongMsg PongMessage
 			if err := json.Unmarshal(message, &pongMsg); err == nil && pongMsg.Type == "pong" {
 				if pongMsg.ID == s.lastPingID {
-					log.Printf("Received matching pong with ID: %d\n", pongMsg.ID)
+					// log.Printf("Received matching pong with ID: %d\n", pongMsg.ID)
 				} else {
 					log.Printf("Warning: Received pong with mismatched ID. Expected: %d, Got: %d\n", s.lastPingID, pongMsg.ID)
 				}
@@ -199,13 +225,37 @@ func (s *SlackWebSocket) ReadMessages() error {
 			// Try to parse as reconnect message
 			var reconnectMsg ReconnectMessage
 			if err := json.Unmarshal(message, &reconnectMsg); err == nil && reconnectMsg.Type == "reconnect_url" {
-				log.Printf("Received new reconnect URL\n")
+				// log.Printf("Received new reconnect URL\n")
 				s.cache.SetWebSocketURL(reconnectMsg.URL)
 				continue
 			}
 
-			// Log other messages for debugging
-			log.Printf("Received message: %s\n", message)
+			// Try to parse as hello message
+			var helloMsg struct {
+				Type   string `json:"type"`
+				Region string `json:"region"`
+				HostID string `json:"host_id"`
+				Start  bool   `json:"start"`
+			}
+			if err := json.Unmarshal(message, &helloMsg); err == nil && helloMsg.Type == "hello" {
+				log.Printf("Successfully connected to Slack (Region: %s, Host: %s)\n", helloMsg.Region, helloMsg.HostID)
+				continue
+			}
+
+			// Print all other messages
+			var genericMsg map[string]interface{}
+			if err := json.Unmarshal(message, &genericMsg); err == nil {
+				// Skip ping messages
+				if msgType, ok := genericMsg["type"].(string); ok && (msgType == "ping" || msgType == "reconnect_url") {
+					continue
+				}
+				// Pretty print the message
+				prettyJSON, _ := json.MarshalIndent(genericMsg, "", "  ")
+				log.Printf("Received message:\n%s\n", string(prettyJSON))
+			} else {
+				// If not JSON, print raw message
+				log.Printf("Received raw message: %s\n", message)
+			}
 		}
 	}
 }

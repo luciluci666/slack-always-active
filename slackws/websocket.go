@@ -174,10 +174,29 @@ func (s *SlackWebSocket) ReadMessages() error {
 				return
 			case <-reconnectTicker.C:
 				s.mu.Lock()
-				if s.isConnected {
+				if s.isConnected && s.conn != nil {
 					log.Printf("Scheduled reconnection triggered\n")
+					// Store connection reference
+					conn := s.conn
 					s.mu.Unlock()
-					s.Disconnect()
+
+					// Active closure: Send close message
+					if err := conn.WriteControl(websocket.CloseMessage,
+						websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+						time.Now().Add(time.Second)); err != nil {
+						log.Printf("Error sending close message: %v\n", err)
+					}
+
+					// Close the connection
+					conn.Close()
+
+					// Update connection state
+					s.mu.Lock()
+					s.conn = nil
+					s.isConnected = false
+					s.mu.Unlock()
+
+					// Attempt to reconnect
 					if err := s.Connect(); err != nil {
 						log.Printf("Error during scheduled reconnection: %v\n", err)
 						continue
@@ -201,12 +220,23 @@ func (s *SlackWebSocket) ReadMessages() error {
 				s.mu.Unlock()
 				return fmt.Errorf("websocket connection is closed")
 			}
+			conn := s.conn
 			s.mu.Unlock()
 
-			_, message, err := s.conn.ReadMessage()
+			_, message, err := conn.ReadMessage()
 			if err != nil {
 				s.mu.Lock()
 				s.isConnected = false
+				if s.conn != nil {
+					// Check if it's a close error
+					if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+						log.Printf("Received close message from peer\n")
+					} else {
+						log.Printf("Error reading message: %v\n", err)
+					}
+					s.conn.Close()
+					s.conn = nil
+				}
 				s.mu.Unlock()
 				return fmt.Errorf("error reading message: %v", err)
 			}

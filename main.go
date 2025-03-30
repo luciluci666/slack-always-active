@@ -196,7 +196,7 @@ func main() {
 			default:
 				if ws.IsConnected() {
 					if err := ws.ReadMessages(); err != nil {
-						if !strings.Contains(err.Error(), "read tcp") {
+						if !strings.Contains(err.Error(), "connection is closed") {
 							logger.Error("Error reading messages:", err)
 						}
 						// Don't disconnect here, let the working hours check handle reconnection

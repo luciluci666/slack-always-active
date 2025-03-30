@@ -235,18 +235,6 @@ func (s *SlackWebSocket) ReadMessages() error {
 			conn := s.conn
 			s.mu.Unlock()
 
-			// Set read deadline to detect connection issues
-			if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-				s.mu.Lock()
-				s.isConnected = false
-				if s.conn != nil {
-					s.conn.Close()
-					s.conn = nil
-				}
-				s.mu.Unlock()
-				return fmt.Errorf("error setting read deadline: %v", err)
-			}
-
 			_, message, err := conn.ReadMessage()
 			if err != nil && !s.isConnected {
 				s.mu.Lock()
@@ -264,11 +252,6 @@ func (s *SlackWebSocket) ReadMessages() error {
 				}
 				s.mu.Unlock()
 				return fmt.Errorf("error reading message: %v", err)
-			}
-
-			// Reset read deadline after successful read
-			if err := conn.SetReadDeadline(time.Time{}); err != nil {
-				logger.Error("Error resetting read deadline: %v", err)
 			}
 
 			// Try to parse as pong message

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,6 +121,7 @@ func (s *SlackWebSocket) sendPing() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Check connection state
 	if s.conn == nil || s.closed || !s.isConnected {
 		return fmt.Errorf("websocket connection is closed")
 	}
@@ -147,7 +149,7 @@ func (s *SlackWebSocket) sendPing() error {
 
 func (s *SlackWebSocket) ReadMessages() error {
 	pingTicker := time.NewTicker(5 * time.Second)
-	reconnectTicker := time.NewTicker(5 * time.Minute)
+	reconnectTicker := time.NewTicker(5 * time.Second)
 	defer pingTicker.Stop()
 	defer reconnectTicker.Stop()
 
@@ -158,6 +160,13 @@ func (s *SlackWebSocket) ReadMessages() error {
 			case <-s.stopChan:
 				return
 			case <-pingTicker.C:
+				s.mu.Lock()
+				if s.conn == nil || s.closed || !s.isConnected {
+					s.mu.Unlock()
+					continue
+				}
+				s.mu.Unlock()
+
 				if err := s.sendPing(); err != nil {
 					log.Printf("Error sending ping: %v\n", err)
 					return
@@ -194,6 +203,7 @@ func (s *SlackWebSocket) ReadMessages() error {
 					s.mu.Lock()
 					s.conn = nil
 					s.isConnected = false
+					s.closed = true
 					s.mu.Unlock()
 
 					// Attempt to reconnect
@@ -223,14 +233,28 @@ func (s *SlackWebSocket) ReadMessages() error {
 			conn := s.conn
 			s.mu.Unlock()
 
+			// Set read deadline to detect connection issues
+			if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+				s.mu.Lock()
+				s.isConnected = false
+				if s.conn != nil {
+					s.conn.Close()
+					s.conn = nil
+				}
+				s.mu.Unlock()
+				return fmt.Errorf("error setting read deadline: %v", err)
+			}
+
 			_, message, err := conn.ReadMessage()
-			if err != nil {
+			if err != nil && !s.isConnected {
 				s.mu.Lock()
 				s.isConnected = false
 				if s.conn != nil {
 					// Check if it's a close error
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 						log.Printf("Received close message from peer\n")
+					} else if strings.Contains(err.Error(), "read tcp") {
+						log.Printf("Connection closed due to TCP read error\n")
 					} else {
 						log.Printf("Error reading message: %v\n", err)
 					}
@@ -239,6 +263,11 @@ func (s *SlackWebSocket) ReadMessages() error {
 				}
 				s.mu.Unlock()
 				return fmt.Errorf("error reading message: %v", err)
+			}
+
+			// Reset read deadline after successful read
+			if err := conn.SetReadDeadline(time.Time{}); err != nil {
+				log.Printf("Error resetting read deadline: %v\n", err)
 			}
 
 			// Try to parse as pong message
@@ -296,8 +325,8 @@ func (ws *SlackWebSocket) Disconnect() {
 	defer ws.mu.Unlock()
 
 	if ws.conn != nil {
-		ws.conn.Close()
-		ws.conn = nil
 		ws.isConnected = false
+		ws.conn.UnderlyingConn().Close()
+		ws.conn = nil
 	}
 }

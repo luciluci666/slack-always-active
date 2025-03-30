@@ -3,7 +3,6 @@ package slackws
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/lucy/slack-always-active/cache"
+	"github.com/lucy/slack-always-active/logger"
 )
 
 type ReconnectMessage struct {
@@ -149,7 +149,7 @@ func (s *SlackWebSocket) sendPing() error {
 
 func (s *SlackWebSocket) ReadMessages() error {
 	pingTicker := time.NewTicker(5 * time.Second)
-	reconnectTicker := time.NewTicker(5 * time.Second)
+	reconnectTicker := time.NewTicker(5 * time.Minute)
 	defer pingTicker.Stop()
 	defer reconnectTicker.Stop()
 
@@ -168,7 +168,9 @@ func (s *SlackWebSocket) ReadMessages() error {
 				s.mu.Unlock()
 
 				if err := s.sendPing(); err != nil {
-					log.Printf("Error sending ping: %v\n", err)
+					if !strings.Contains(err.Error(), "close sent") {
+						logger.Error("Error sending ping: %v", err)
+					}
 					return
 				}
 			}
@@ -184,7 +186,7 @@ func (s *SlackWebSocket) ReadMessages() error {
 			case <-reconnectTicker.C:
 				s.mu.Lock()
 				if s.isConnected && s.conn != nil {
-					log.Printf("Scheduled reconnection triggered\n")
+					logger.Info("Scheduled reconnection triggered")
 					// Store connection reference
 					conn := s.conn
 					s.mu.Unlock()
@@ -193,7 +195,7 @@ func (s *SlackWebSocket) ReadMessages() error {
 					if err := conn.WriteControl(websocket.CloseMessage,
 						websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 						time.Now().Add(time.Second)); err != nil {
-						log.Printf("Error sending close message: %v\n", err)
+						logger.Error("Error sending close message: %v", err)
 					}
 
 					// Close the connection
@@ -208,10 +210,10 @@ func (s *SlackWebSocket) ReadMessages() error {
 
 					// Attempt to reconnect
 					if err := s.Connect(); err != nil {
-						log.Printf("Error during scheduled reconnection: %v\n", err)
+						logger.Error("Error during scheduled reconnection: %v", err)
 						continue
 					}
-					log.Printf("Successfully reconnected\n")
+					logger.Info("Successfully reconnected")
 				} else {
 					s.mu.Unlock()
 				}
@@ -252,11 +254,10 @@ func (s *SlackWebSocket) ReadMessages() error {
 				if s.conn != nil {
 					// Check if it's a close error
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-						log.Printf("Received close message from peer\n")
+						logger.Info("Received close message from peer")
 					} else if strings.Contains(err.Error(), "read tcp") {
-						log.Printf("Connection closed due to TCP read error\n")
 					} else {
-						log.Printf("Error reading message: %v\n", err)
+						logger.Error("Error reading message: %v", err)
 					}
 					s.conn.Close()
 					s.conn = nil
@@ -267,16 +268,16 @@ func (s *SlackWebSocket) ReadMessages() error {
 
 			// Reset read deadline after successful read
 			if err := conn.SetReadDeadline(time.Time{}); err != nil {
-				log.Printf("Error resetting read deadline: %v\n", err)
+				logger.Error("Error resetting read deadline: %v", err)
 			}
 
 			// Try to parse as pong message
 			var pongMsg PongMessage
 			if err := json.Unmarshal(message, &pongMsg); err == nil && pongMsg.Type == "pong" {
 				if pongMsg.ID == s.lastPingID {
-					// log.Printf("Received matching pong with ID: %d\n", pongMsg.ID)
+					// logger.Debug("Received matching pong with ID: %d", pongMsg.ID)
 				} else {
-					log.Printf("Warning: Received pong with mismatched ID. Expected: %d, Got: %d\n", s.lastPingID, pongMsg.ID)
+					logger.Warn("Received pong with mismatched ID. Expected: %d, Got: %d", s.lastPingID, pongMsg.ID)
 				}
 				continue
 			}
@@ -284,7 +285,7 @@ func (s *SlackWebSocket) ReadMessages() error {
 			// Try to parse as reconnect message
 			var reconnectMsg ReconnectMessage
 			if err := json.Unmarshal(message, &reconnectMsg); err == nil && reconnectMsg.Type == "reconnect_url" {
-				// log.Printf("Received new reconnect URL\n")
+				// logger.Debug("Received new reconnect URL")
 				s.cache.SetWebSocketURL(reconnectMsg.URL)
 				continue
 			}
@@ -297,7 +298,7 @@ func (s *SlackWebSocket) ReadMessages() error {
 				Start  bool   `json:"start"`
 			}
 			if err := json.Unmarshal(message, &helloMsg); err == nil && helloMsg.Type == "hello" {
-				log.Printf("Successfully connected to Slack (Region: %s, Host: %s)\n", helloMsg.Region, helloMsg.HostID)
+				logger.Info("Successfully connected to Slack (Region: %s, Host: %s)", helloMsg.Region, helloMsg.HostID)
 				continue
 			}
 
@@ -310,10 +311,10 @@ func (s *SlackWebSocket) ReadMessages() error {
 				}
 				// Pretty print the message
 				prettyJSON, _ := json.MarshalIndent(genericMsg, "", "  ")
-				log.Printf("Received message:\n%s\n", string(prettyJSON))
+				logger.Info("Received message:\n%s", string(prettyJSON))
 			} else {
 				// If not JSON, print raw message
-				log.Printf("Received raw message: %s\n", message)
+				logger.Info("Received raw message: %s", string(message))
 			}
 		}
 	}
